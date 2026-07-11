@@ -19,6 +19,7 @@ import type { ColorRGBA, DesignerElement, Rect, TextAlign, TextFont } from './ty
 import { beginActiveDrag } from './useActiveDrag'
 import { useDesigner } from './useDesigner'
 import { useItemCatalog } from './useItemCatalog'
+import { useLocalImages } from './useLocalImages'
 
 defineOptions({ name: 'CanvasElement' })
 
@@ -57,6 +58,9 @@ const {
 // Item-icon fills preview via the CDN inventory icons (same source as the item references pages).
 const { ensureLoaded: ensureItemCatalog, iconUrlById } = useItemCatalog()
 ensureItemCatalog()
+
+// Stored-image fills (png / imagedb) can carry a locally-browsed preview image.
+const { getLocalImage } = useLocalImages()
 
 // Inside a repeating template the canvas shows ROW 0's values on the real elements (the ghosts show
 // the later rows) — so an item-bound element previews data, not its literal placeholder.
@@ -125,12 +129,18 @@ type ImageFill = { url: string; fit: 'stretch' | 'icon'; tint: { r: number; g: n
 const fillImage = computed<ImageFill | null>(() => {
   const el = rowZeroElement.value
   if (el.type !== 'panel') return null
+  const img = el.props.image
   let url: string | null = null
   let fit: 'stretch' | 'icon' = 'stretch'
-  if (el.props.image?.url) {
-    url = el.props.image.url
-  } else if (el.props.image?.kind === 'itemicon') {
-    url = iconUrlById(el.props.image.itemId) ?? null
+  // A locally-browsed preview image wins over the imagedb preload URL (it is the more deliberate
+  // stand-in); design-time only -- the generated output renders from the fill's real source.
+  const local = img && (img.kind === 'png' || img.kind === 'imagedb') ? getLocalImage(img.previewImage) : null
+  if (local) {
+    url = local.dataUrl
+  } else if (img?.url) {
+    url = img.url
+  } else if (img?.kind === 'itemicon') {
+    url = iconUrlById(img.itemId) ?? null
     fit = 'icon'
   }
   if (!url) return null
@@ -277,7 +287,7 @@ const ghostBoxes = computed<GhostBox[]>(() => {
     for (const f of flat) {
       const g = applyItemBindings(f.el, rows[i])
       const texty = TEXTY.has(g.type)
-      const p = g.props as { color?: ColorRGBA; image?: { kind: string; url?: string; itemId?: number }; align?: TextAlign; font?: TextFont; fontSize?: number; text?: string }
+      const p = g.props as { color?: ColorRGBA; image?: { kind: string; url?: string; itemId?: number; previewImage?: string }; align?: TextAlign; font?: TextFont; fontSize?: number; text?: string }
       let textStyle: Record<string, string> | null = null
       if (texty && p.align && p.color && p.fontSize) {
         const a = alignParts(p.align)
@@ -293,11 +303,13 @@ const ghostBoxes = computed<GhostBox[]>(() => {
         }
       }
       const imageUrl =
-        g.type === 'panel' && p.image?.kind === 'url' && p.image.url
-          ? p.image.url
-          : g.type === 'panel' && p.image?.kind === 'itemicon'
-            ? iconUrlById(p.image.itemId ?? 0)
-            : null
+        g.type === 'panel' && p.image?.previewImage && getLocalImage(p.image.previewImage)
+          ? getLocalImage(p.image.previewImage)!.dataUrl
+          : g.type === 'panel' && p.image?.kind === 'url' && p.image.url
+            ? p.image.url
+            : g.type === 'panel' && p.image?.kind === 'itemicon'
+              ? iconUrlById(p.image.itemId ?? 0)
+              : null
       out.push({
         key: `${g.id}.${i}`,
         x: f.x + dx,

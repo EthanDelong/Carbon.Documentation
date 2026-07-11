@@ -14,6 +14,7 @@ import { ASPECT_PRESETS, CLIENT_PANELS, type AspectPreset, type ClientPanel, typ
 import { ZOOM_STEP, useCanvasView } from './useCanvasView'
 import { useDesigner } from './useDesigner'
 import { comboFromEvent, comboLabel, isTypingTarget, useKeybinds, type KeyActionId } from './useKeybinds'
+import { collectPreviewImageIds, useLocalImages } from './useLocalImages'
 import { useDock } from './useDock'
 import { useScreenShare } from './useScreenShare'
 import { useDockDrag } from './useDockDrag'
@@ -56,12 +57,18 @@ function fileCloseAll() {
 
 const GRID_SIZES = [1, 2, 4, 8, 16, 32]
 
+const { gcLocalImages } = useLocalImages()
+
 onMounted(() => {
   // The docs apply a global noise/speckle overlay (body::after, color-dodge) over the page;
   // it must not bleed into the canvas preview. Tag the body so we can suppress it (unscoped
   // <style> below), restored on navigate-away.
   document.body.classList.add('layout-designer-page')
   init()
+  // Local preview images that no layout references anymore (deleted layouts/elements, replaced
+  // files) are dead weight in a small storage budget -- sweep them once per session. Right after
+  // init() the live tree equals the loaded store, so the layouts alone are the full reference set.
+  gcLocalImages(collectPreviewImageIds(layouts.value.map((l) => l.data)))
 })
 onBeforeUnmount(() => {
   document.body.classList.remove('layout-designer-page')

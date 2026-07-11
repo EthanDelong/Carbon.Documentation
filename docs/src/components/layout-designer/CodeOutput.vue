@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { watchDebounced } from '@vueuse/core'
-import { Check, Copy, PictureInPicture2, X } from 'lucide-vue-next'
+import { Check, Copy, Download, PictureInPicture2, X } from 'lucide-vue-next'
 import { computed, inject, ref, watch } from 'vue'
 import { copyText } from './clipboard'
 import { generateCode, generateFullClass, generateJson, generateSelected } from './codegen'
 import { usePopout } from './usePopout'
 import { useShiki } from './useShiki'
 import { useDesigner } from './useDesigner'
+import { localImageBytes, useLocalImages } from './useLocalImages'
+import { buildZip, type ZipEntry } from './zipStore'
 
-const { elements, dataSources, canvas, provider, selectedIds } = useDesigner()
+const { elements, dataSources, canvas, provider, selectedIds, currentLayoutName } = useDesigner()
+const { getLocalImage } = useLocalImages()
 
 // Emission level. Target (Oxide/Carbon/Both) applies to class/ux/selected; json is
 // provider-independent (the CUI wire format). The captured IR lives in its own Debug pane.
@@ -69,6 +72,40 @@ refresh() // initial synchronous fill (no blank frame before the first debounce 
 const lang = computed(() => (tab.value === 'json' ? 'json' : 'csharp'))
 const { html } = useShiki(() => (tab.value === 'selected' ? active.value : ''), lang)
 
+// Download the generated plugin as a file. With local preview images attached to fills, the
+// download becomes a zip: the .cs plus every attached image in its original uploaded format,
+// named after the fill's declared in-game source (image-db name / data id) so dropping the files
+// onto the server lines up with the generated code. Nothing is transmitted -- all client-side.
+function safeFileName(s: string): string {
+  return s.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'layout'
+}
+function extFor(mime: string): string {
+  const m = /^image\/(\w+)/.exec(mime)
+  return m ? (m[1] === 'jpeg' ? 'jpg' : m[1]) : 'png'
+}
+function download() {
+  const base = safeFileName(currentLayoutName.value)
+  const cs = generateFullClass(elements.value, provider.value, canvas.rootLayer, dataSources.value)
+  const entries: ZipEntry[] = [{ name: `${base}.cs`, data: new TextEncoder().encode(cs) }]
+  const seen = new Set<string>()
+  for (const el of elements.value) {
+    const img = el.type === 'panel' ? el.props.image : null
+    if (!img || (img.kind !== 'png' && img.kind !== 'imagedb') || !img.previewImage || seen.has(img.previewImage)) continue
+    seen.add(img.previewImage)
+    const stored = getLocalImage(img.previewImage)
+    if (!stored) continue
+    const declared = img.kind === 'imagedb' ? img.dbName : img.png
+    entries.push({ name: `${safeFileName(declared || stored.name.replace(/\.[^.]+$/, ''))}.${extFor(stored.type)}`, data: localImageBytes(stored) })
+  }
+  const zip = entries.length > 1
+  const blob = zip ? buildZip(entries) : new Blob([entries[0].data], { type: 'text/plain' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = zip ? `${base}.zip` : `${base}.cs`
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
 const copied = ref(false)
 async function copy() {
   // Copy the CURRENT code, freshly generated — never the up-to-60ms-stale debounced snapshot mid-edit.
@@ -114,6 +151,13 @@ async function copy() {
             <button class="ld-out-copy" :title="copied ? 'Copied' : 'Copy'" @click="copy">
               <component :is="copied ? Check : Copy" :size="13" />
               {{ copied ? 'Copied' : 'Copy' }}
+            </button>
+            <button
+              class="ld-out-copy"
+              title="Download the generated plugin (.cs). Fills with a local preview image attached download as a zip: the .cs plus the images in their original format, named after their declared in-game source."
+              @click="download"
+            >
+              <Download :size="13" />
             </button>
             <button
               v-if="popoutSupported"

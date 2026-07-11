@@ -11,6 +11,7 @@ import { CLOSE_ROOT } from './elements/button'
 import type { ContainerLayout } from './elements/container'
 import type { ColorRGBA, DesignerElement, ImageFill, ListDataSource, OutlineModifier, TextAlign, TextDataSource, TextFont } from './types'
 import { useDesigner } from './useDesigner'
+import { collectPreviewImageIds, useLocalImages } from './useLocalImages'
 
 const {
   selected,
@@ -32,6 +33,7 @@ const {
   setRepeat,
   setItemBinding,
   repeatSourceOf,
+  layouts,
 } = useDesigner()
 
 // Focus + select the content field when asked (e.g. context-menu "Edit label text"), after it renders.
@@ -325,21 +327,67 @@ function setImageKind(el: DesignerElement, kind: ImageKind) {
 function setSteamId(el: DesignerElement, raw: string) {
   update(el.id, { props: { image: { kind: 'steamavatar', steamId: raw.trim() } } })
 }
-/** Image-DB fields keep the sibling intact (read the current image for the other value). */
-function curImageDb(el: DesignerElement): { dbName: string; url: string } {
+/** Image-DB fields keep the siblings intact (read the current image for the other values). */
+function curImageDb(el: DesignerElement): { dbName: string; url: string; previewImage?: string } {
   return el.type === 'panel' && el.props.image?.kind === 'imagedb' ? el.props.image : { dbName: '', url: '' }
 }
 function setImageDbName(el: DesignerElement, raw: string) {
-  update(el.id, { props: { image: { kind: 'imagedb', dbName: raw.trim(), url: curImageDb(el).url } } })
+  const cur = curImageDb(el)
+  update(el.id, { props: { image: { kind: 'imagedb', dbName: raw.trim(), url: cur.url, previewImage: cur.previewImage } } })
 }
 function setImageDbUrl(el: DesignerElement, raw: string) {
-  update(el.id, { props: { image: { kind: 'imagedb', dbName: curImageDb(el).dbName, url: raw.trim() } } })
+  const cur = curImageDb(el)
+  update(el.id, { props: { image: { kind: 'imagedb', dbName: cur.dbName, url: raw.trim(), previewImage: cur.previewImage } } })
 }
 function setSprite(el: DesignerElement, raw: string) {
   update(el.id, { props: { image: { kind: 'sprite', sprite: raw.trim() } } })
 }
 function setPng(el: DesignerElement, raw: string) {
-  update(el.id, { props: { image: { kind: 'png', png: raw.trim() } } })
+  const prev = el.type === 'panel' && el.props.image?.kind === 'png' ? el.props.image.previewImage : undefined
+  update(el.id, { props: { image: { kind: 'png', png: raw.trim(), previewImage: prev } } })
+}
+
+// --- local preview image (png / imagedb fills) -- design-time only, lives in browser storage ---
+const { putImageFile, getLocalImage, gcLocalImages } = useLocalImages()
+const previewFileInput = ref<HTMLInputElement | null>(null)
+const previewImage = computed(() => {
+  const img = panelProps.value?.image
+  return img && (img.kind === 'png' || img.kind === 'imagedb') ? getLocalImage(img.previewImage) : null
+})
+function patchPreviewImage(el: DesignerElement, id: string | undefined) {
+  const img = el.type === 'panel' ? el.props.image : null
+  if (!img || (img.kind !== 'png' && img.kind !== 'imagedb')) return
+  update(el.id, { props: { image: { ...img, previewImage: id } } })
+  scheduleImageGc()
+}
+async function onPreviewFileChange(el: DesignerElement, e: Event) {
+  const input = e.target as HTMLInputElement
+  const f = input.files?.[0]
+  input.value = ''
+  if (!f) return
+  try {
+    patchPreviewImage(el, await putImageFile(f))
+  } catch (err) {
+    window.alert((err as Error).message)
+  }
+}
+function clearPreviewImage(el: DesignerElement) {
+  patchPreviewImage(el, undefined)
+}
+// GC after the debounced autosave has folded the change into the layout store, so a replaced or
+// removed image that nothing references anymore is dropped from the (small) localStorage budget.
+let gcTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleImageGc() {
+  if (gcTimer) clearTimeout(gcTimer)
+  gcTimer = setTimeout(() => {
+    gcTimer = null
+    gcLocalImages(
+      collectPreviewImageIds(
+        layouts.value.map((l) => l.data),
+        elements.value,
+      ),
+    )
+  }, 1200)
 }
 /** Item-icon fields keep the other field intact (read the current image for the sibling value). */
 function curItemIcon(el: DesignerElement): { itemId: number; skinId: number } {
@@ -935,6 +983,15 @@ const computedRect = computed(() => (selected.value ? rectOf(selected.value.id) 
               <input type="text" placeholder="https://example.com/logo.png" :value="panelProps.image?.kind === 'imagedb' ? panelProps.image.url : ''" @change="setImageDbUrl(selected, ($event.target as HTMLInputElement).value)" />
             </label>
           </template>
+          <div v-if="imageKind === 'png' || imageKind === 'imagedb'" class="ld-field">
+            <span class="ld-field-label">Preview image <InfoTip text="A local image file shown on the canvas while designing. It stays in this browser's storage -- never uploaded anywhere and never part of the generated code; in game the fill renders from the source above. The Code pane's Download button bundles attached images next to the .cs in their original format." /></span>
+            <div class="ld-previmg-row">
+              <img v-if="previewImage" class="ld-previmg-thumb" :src="previewImage.dataUrl" alt="" :title="previewImage.name" />
+              <button class="ld-previmg-btn" type="button" @click="previewFileInput?.click()">{{ previewImage ? 'Replace...' : 'Browse...' }}</button>
+              <button v-if="previewImage" class="ld-previmg-btn" type="button" @click="clearPreviewImage(selected)">Remove</button>
+              <input ref="previewFileInput" type="file" accept="image/*" class="ld-previmg-file" @change="onPreviewFileChange(selected, $event)" />
+            </div>
+          </div>
         </template>
       </template>
 
@@ -1371,5 +1428,38 @@ const computedRect = computed(() => (selected.value ? rectOf(selected.value.id) 
   color: var(--vp-c-text-3);
   font-variant-numeric: tabular-nums;
   line-height: 1.5;
+}
+
+/* local preview image row (png / image-db fills) */
+.ld-previmg-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ld-previmg-thumb {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 4px;
+  background: #0c0c0e;
+}
+
+.ld-previmg-btn {
+  padding: 3px 9px;
+  font-size: 11.5px;
+  color: var(--vp-c-text-2);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 4px;
+}
+
+.ld-previmg-btn:hover {
+  border-color: var(--c-carbon-1);
+  color: var(--vp-c-text-1);
+}
+
+.ld-previmg-file {
+  display: none;
 }
 </style>

@@ -94,12 +94,16 @@ export const CLIENT_PANELS: ClientPanelDef[] = [
 export type ImageFill =
   | { kind: 'url'; url: string }
   | { kind: 'sprite'; sprite: string }
-  | { kind: 'png'; png: string }
+  // `previewImage` (png / imagedb): id of a locally-browsed image in the designer's browser-storage
+  // image store (useLocalImages) -- canvas preview only. It is NEVER emitted into generated code or
+  // AddUi JSON (the in-game source stays the data id / db name), and a dangling id (layout imported
+  // on another machine) just means no preview.
+  | { kind: 'png'; png: string; previewImage?: string }
   | { kind: 'itemicon'; itemId: number; skinId: number }
   // SteamID64 exceeds JS's safe integer range, so keep it a string to preserve precision.
   | { kind: 'steamavatar'; steamId: string }
   // A named image loaded into the framework's image DB from `url` (preloaded in the plugin lifecycle).
-  | { kind: 'imagedb'; dbName: string; url: string }
+  | { kind: 'imagedb'; dbName: string; url: string; previewImage?: string }
 
 /**
  * Optional border. CUI has no border primitive, so codegen renders it as four edge subpanels

@@ -16,6 +16,17 @@ import type { CuiComponent, ImageFill, PanelElement } from '../types'
 export const IMAGE_COMPONENT_TYPE = 'UnityEngine.UI.Image'
 export const RAW_IMAGE_COMPONENT_TYPE = 'UnityEngine.UI.RawImage'
 
+/**
+ * A locally-browsed preview image can't render in game by itself -- the fill still needs its real
+ * server-side source. When that source is blank the generated code gets an explicit marker instead
+ * of silently emitting an empty string.
+ */
+function missingSourceTodo(fill: ImageFill): string[] {
+  if (fill.kind === 'png' && !fill.png.trim()) return ["// TODO: set the stored image's data id -- this image fill has no in-game source yet."]
+  if (fill.kind === 'imagedb' && !fill.dbName.trim()) return ['// TODO: set the image DB name -- this image fill has no in-game source yet.']
+  return []
+}
+
 /** Oxide CUI lines for a panel whose fill is `fill` (the panel color is the tint). */
 export function oxideImageFill(el: PanelElement, ctx: EmitContext, fill: ImageFill): string[] {
   const c = color(el.props.color)
@@ -25,7 +36,7 @@ export function oxideImageFill(el: PanelElement, ctx: EmitContext, fill: ImageFi
     case 'sprite':
       return cuiPanelLines(el, ctx, `Sprite = "${esc(fill.sprite)}", Color = "${c}"`)
     case 'png':
-      return cuiPanelLines(el, ctx, `Png = "${esc(fill.png)}", Color = "${c}"`)
+      return [...missingSourceTodo(fill), ...cuiPanelLines(el, ctx, `Png = "${esc(fill.png)}", Color = "${c}"`)]
     case 'itemicon':
       return cuiPanelLines(el, ctx, `ItemId = ${fill.itemId}, SkinId = ${fill.skinId}, Color = "${c}"`)
     case 'steamavatar':
@@ -33,7 +44,7 @@ export function oxideImageFill(el: PanelElement, ctx: EmitContext, fill: ImageFi
     case 'imagedb':
       // Oxide has no built-in image DB — reference a preloaded image by name via ImageLibrary (the
       // load itself is emitted in the plugin lifecycle). Requires the ImageLibrary plugin at runtime.
-      return cuiPanelLines(el, ctx, `Png = (string)ImageLibrary?.Call("GetImage", "${esc(fill.dbName)}"), Color = "${c}"`)
+      return [...missingSourceTodo(fill), ...cuiPanelLines(el, ctx, `Png = (string)ImageLibrary?.Call("GetImage", "${esc(fill.dbName)}"), Color = "${c}"`)]
   }
 }
 
@@ -50,7 +61,7 @@ export function carbonImageFill(el: PanelElement, ctx: EmitContext, fill: ImageF
     case 'sprite':
       return [`cui.v2.CreateSprite("${parent}",`, `    ${pos},`, `    ${off},`, `    "${esc(fill.sprite)}", "${c}", "${name}");`, '']
     case 'png':
-      return [`cui.v2.CreateImage("${parent}",`, `    ${pos},`, `    ${off},`, `    "${esc(fill.png)}", "${c}", "${name}");`, '']
+      return [...missingSourceTodo(fill), `cui.v2.CreateImage("${parent}",`, `    ${pos},`, `    ${off},`, `    "${esc(fill.png)}", "${c}", "${name}");`, '']
     case 'itemicon':
       // CreateItemIcon(parent, pos, offset, itemId, skinId, color, name) — the color arg (tint) sits
       // BEFORE name; omitting it puts the name in the color slot and produces an invalid color.
@@ -58,7 +69,7 @@ export function carbonImageFill(el: PanelElement, ctx: EmitContext, fill: ImageF
     case 'steamavatar':
       return [`cui.v2.CreateSteamAvatar("${parent}",`, `    ${pos},`, `    ${off},`, `    "${esc(fill.steamId)}", "${c}", "${name}");`, '']
     case 'imagedb':
-      return [`cui.v2.CreateImageFromDb("${parent}",`, `    ${pos},`, `    ${off},`, `    "${esc(fill.dbName)}", "${c}", "${name}");`, '']
+      return [...missingSourceTodo(fill), `cui.v2.CreateImageFromDb("${parent}",`, `    ${pos},`, `    ${off},`, `    "${esc(fill.dbName)}", "${c}", "${name}");`, '']
   }
 }
 
